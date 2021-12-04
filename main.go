@@ -21,7 +21,7 @@ func main() {
 	fmt.Println("Pub Key", rsaPubKey, "\n")
 	fmt.Println("Priv Key", rsaPrivKey, "\n")
 
-	var aesKey AES.Key = AES.Initialization()
+	var aesKey AES.Key = AES.Initialization(false, "")
 
 	fmt.Println("Generating Random AES Key and Doing Key Change using RSA\n")
 
@@ -31,6 +31,7 @@ func main() {
 	fmt.Println("AES Key", decAesKey, "\n")
 
 	cipherText := AES.Encryption(aesKey, "HELLO")
+
 	plainText := AES.Decryption(aesKey, cipherText)
 
 	fmt.Println("AES Decrypted Text", plainText)

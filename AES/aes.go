@@ -7,7 +7,7 @@ import (
 	"github.com/Noman-Aziz/E2E-Chat-App/AES/utils"
 )
 
-func Initialization() Key {
+func Initialization(received bool, key string) Key {
 
 	//Initial Variables
 	var keys Key
@@ -17,12 +17,20 @@ func Initialization() Key {
 	//Fixing Sizes for Dynamic Array
 	keys.RoundKeys = make([][16]byte, keys.Rounds+1)
 
-	//Generating Random 16 Bytes Key Input
-	buffer := utils.RandomKeyGenerator(16, 4, 4, 4)
+	//First Time Key Generation
+	if !received {
+		//Generating Random 16 Bytes Key Input
+		buffer := utils.RandomKeyGenerator(16, 4, 4, 4)
 
-	//Read initial key
-	for i := 0; i < 16; i++ {
-		keys.RoundKeys[0][i] = buffer[i]
+		//Read initial key
+		for i := 0; i < 16; i++ {
+			keys.RoundKeys[0][i] = buffer[i]
+		}
+	} else {
+		//We have received Round 0 key
+		for i := 0; i < 16; i++ {
+			keys.RoundKeys[0][i] = key[i]
+		}
 	}
 
 	for i := 0; i < keys.Rounds; i++ {
