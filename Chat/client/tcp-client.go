@@ -2,6 +2,8 @@ package client
 
 import (
 	"bytes"
+	"crypto/sha512"
+	"encoding/base64"
 	"io"
 	"log"
 	"math/big"
@@ -159,14 +161,96 @@ func (c *TcpChatClient) Start() {
 					c.SendMessage("RSAKEYACK")
 
 					RsaKeyReceived = true
+
+					//Sleep for 1s before sending another message
+					time.Sleep(1 * time.Second)
+
+					//C1 Sends Signature to C2
+					message := "Signature Achieved for Authentication and Non Repudiation"
+
+					//Taking Hash of Message
+					messageHash := sha512.Sum512([]byte(message))
+
+					//Appending Message with Hash
+					message = message + "090078601" + bytes.NewBuffer(messageHash[:]).String()
+
+					//Encrypting with Private Key
+
+					//Temporarily converting type due to code structure
+					var tempPrivKey RSA.PubKey
+					tempPrivKey.E = MyRsaPrivKey.D
+					tempPrivKey.N = MyRsaPrivKey.N
+
+					encMessage := RSA.Encrypt(tempPrivKey, message)
+
+					//Converting Big Int Array to String
+					temp2 := "SIGNATURE"
+					for _, val := range encMessage {
+						temp2 = temp2 + "," + val.String()
+					}
+
+					c.SendMessage(temp2)
+
 				} else if strings.Contains(v.Message, "RSAKEYACK") && !c.first && !RsaKeyAcknowledged {
 					//C2 Receives Ack of C1
 					RsaKeyAcknowledged = true
-				} else if c.first && RsaKeyAcknowledged && !AesKeyExchanged {
+				} else if strings.Contains(v.Message, "SIGNATURE") && !c.first {
+					//C2 Receives Signature from C1
+					temp := strings.Split(v.Message, "SIGNATURE")
+
+					//Converting Message to Apropiate Format
+					temp = strings.Split(temp[1], ",")
+					var encMessage []big.Int
+					for _, val := range temp {
+						var crypt *big.Int = new(big.Int)
+						crypt.SetString(val, 10)
+						encMessage = append(encMessage, *crypt)
+					}
+
+					//Decrypting the Message with C1 Pub RSA Key
+
+					//Temporarily converting type due to code structure
+					var tempPubKey RSA.PrivKey
+					tempPubKey.D = OtherPeerRsaPubKey.E
+					tempPubKey.N = OtherPeerRsaPubKey.N
+
+					decMessage := RSA.Decrypt(tempPubKey, encMessage)
+
+					//Seperating Hash and Signature from Message
+					splitted := strings.Split(decMessage, "090078601")
+
+					//Checking Hash
+					messageHash := sha512.Sum512([]byte(splitted[0]))
+					receivedHash := bytes.NewBufferString(splitted[1]).Bytes()
+
+					//Comparing Hash
+					if len(messageHash) != len(receivedHash) {
+						panic("Signature Integrity Compromised")
+					}
+					for i := 0; i < len(messageHash); i++ {
+						if messageHash[i] != receivedHash[i] {
+							panic("Signature Integrity Compromised")
+						}
+					}
+
+					//Showing Received Message
+					v.Message = splitted[0]
+					c.incoming <- v
+
+					//Sending Acknowledged Message to C1
+					c.SendMessage("SIGACK")
+
+				} else if strings.Contains(v.Message, "SIGACK") && c.first && !AesKeyExchanged {
 					//C1 Send AES Key to C2
 					temp := string(AesKey.RoundKeys[0][:])
 
-					encAesKey := RSA.Encrypt(OtherPeerRsaPubKey, temp)
+					//Taking Hash of Message
+					messageHash := sha512.Sum512([]byte(temp))
+
+					//Appending Message with Hash
+					message := temp + "090078601" + bytes.NewBuffer(messageHash[:]).String()
+
+					encAesKey := RSA.Encrypt(OtherPeerRsaPubKey, message)
 
 					//Converting Big Int Array to String
 					temp = "AESKEYINCOMING"
@@ -193,10 +277,27 @@ func (c *TcpChatClient) Start() {
 					//Decrypting the AES Key with RSA
 					decAesKey := RSA.Decrypt(MyRsaPrivKey, encAesKey)
 
-					AesKey = AES.Initialization(true, decAesKey)
+					//Seperating Hash and Signature from Message
+					splitted := strings.Split(decAesKey, "090078601")
+
+					//Checking Hash
+					messageHash := sha512.Sum512([]byte(splitted[0]))
+					receivedHash := bytes.NewBufferString(splitted[1]).Bytes()
+
+					//Comparing Hash
+					if len(messageHash) != len(receivedHash) {
+						panic("Signature Integrity Compromised")
+					}
+					for i := 0; i < len(messageHash); i++ {
+						if messageHash[i] != receivedHash[i] {
+							panic("Signature Integrity Compromised")
+						}
+					}
+
+					AesKey = AES.Initialization(true, splitted[0])
 
 					//Changing Message Content
-					v.Message = "AES Key Exchanged " + string(AesKey.RoundKeys[0][:])
+					v.Message = "AES Key Exchanged Securely"
 
 					AesKeyExchanged = true
 
@@ -205,10 +306,13 @@ func (c *TcpChatClient) Start() {
 				} else if AesKeyExchanged && RsaKeyAcknowledged && !strings.Contains(v.Message, "AESKEYINCOMING") {
 					//Normal Communication
 
+					//Base64 Decoding Message
+					dynamicStr, _ := base64.StdEncoding.DecodeString(v.Message)
+
 					//Showing Received Message after Decrypting with AES Key
 					var cipherText [][16]byte
 
-					var dynamicStr []byte = bytes.NewBufferString(v.Message).Bytes()
+					//var dynamicStr []byte = bytes.NewBufferString(v.Message).Bytes()
 					var staticStr [16]byte
 
 					index := 0
@@ -224,9 +328,23 @@ func (c *TcpChatClient) Start() {
 						index++
 					}
 
-					plainText := AES.Decryption(AesKey, cipherText)
+					decMessage := AES.Decryption(AesKey, cipherText)
 
-					v.Message = plainText
+					//Seperating Hash and Message from Whole Message
+					splitted := strings.Split(decMessage, "090078601")
+
+					//Checking Hash
+					messageHash := sha512.Sum512([]byte(splitted[0]))
+					receivedHash := bytes.NewBufferString(splitted[1]).Bytes()
+
+					//Comparing Hash
+					for i := 0; i < len(messageHash); i++ {
+						if messageHash[i] != receivedHash[i] {
+							panic("Message Integrity Compromised")
+						}
+					}
+
+					v.Message = splitted[0]
 					c.incoming <- v
 				}
 
@@ -259,6 +377,11 @@ func (c *TcpChatClient) SendMessage(message string) error {
 
 	//If AES Key have been exchanged, encrypt message and send
 	if AesKeyExchanged {
+
+		//Appending Hash with Message for Integrity
+		messageHash := sha512.Sum512([]byte(message))
+		message = message + "090078601" + bytes.NewBuffer(messageHash[:]).String()
+
 		cipherText := AES.Encryption(AesKey, message)
 
 		message = ""
@@ -266,6 +389,9 @@ func (c *TcpChatClient) SendMessage(message string) error {
 		for i := 0; i < len(cipherText); i++ {
 			message += bytes.NewBuffer(cipherText[i][:]).String()
 		}
+
+		//Base64 Encoding the Encrypted Message
+		message = base64.StdEncoding.EncodeToString([]byte(message))
 	}
 
 	return c.Send(protocol.SendCommand{
